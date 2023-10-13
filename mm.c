@@ -27,22 +27,33 @@
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-
+#define MINIMUM_BLOCK_SIZE (2 * sizeof(BlockMetaData))
 #define INITIAL_BLOCK_SIZE (32)
 #define INITIAL_HEAP_SIZE (sizeof(HeapData))
 
 int mm_init(void) {
     mem_init();
     void* p = mem_sbrk(INITIAL_HEAP_SIZE);
-    void* b = mem_sbrk(INITIAL_BLOCK_SIZE + 2 * sizeof(BlockMetaData));
+    void* b = mem_sbrk(INITIAL_BLOCK_SIZE + 2 * sizeof(BlockData));
 
     HeapData* hd = (HeapData*) p;
 
     hd->firstFreeBlock = b;
     hd->largestFreeBlockSize = INITIAL_BLOCK_SIZE;
 
+    BlockData* bd = (BlockData*) b;
+    bd->size = INITIAL_BLOCK_SIZE;
+    bd->metaData.isUsed = 0;
+    bd->nextFreeBlock = NULL;
+    bd->previousFreeBlock = NULL;
+
+    cloneToEnd(bd);
 
     return 0;
+}
+
+void *cloneToEnd(BlockData* bd) {
+    return memcpy(((char *) bd) + sizeof(BlockData) + bd->size, bd, sizeof(BlockData));
 }
 
 void *mm_malloc(size_t size) {
