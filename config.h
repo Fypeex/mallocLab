@@ -46,17 +46,17 @@
  */
 #define AVG_LIBC_THRUPUT      7000E3  /* 7000 Kops/sec */
 
- /* 
+ /*
   * This constant determines the contributions of space utilization
   * (UTIL_WEIGHT) and throughput (1 - UTIL_WEIGHT) to the performance
-  * index.  
+  * index.
   */
 #define UTIL_WEIGHT .60
 
 /* 
  * Alignment requirement in bytes (either 4 or 8) 
  */
-#define ALIGNMENT 8  
+#define ALIGNMENT 8
 
 /* 
  * Maximum heap size in bytes 

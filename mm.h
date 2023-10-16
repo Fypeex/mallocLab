@@ -1,15 +1,16 @@
 #include <stdio.h>
+#include <stdbool.h>
 
-typedef uintptr_t pSize;
+typedef unsigned long bSize;
 
 typedef struct BlockMetaData {
-    int32_t isUsed:1;
-    int32_t otherStuff:31;
+    bool isUsed:1;
+    unsigned long other:63;
 } BlockMetaData;
 
 typedef struct BlockData {
     BlockMetaData metaData;
-    int32_t size;
+    size_t size;
     struct BlockData* nextFreeBlock;
     struct BlockData* previousFreeBlock;
 } BlockData;
@@ -17,8 +18,7 @@ typedef struct BlockData {
 
 typedef struct HeapData {
     BlockData* firstFreeBlock;
-    int32_t largestFreeBlockSize;
-    int32_t otherStuff;
+    BlockData* largestFreeBlock;
 } HeapData;
 
 
@@ -26,9 +26,17 @@ typedef struct HeapData {
 extern int mm_init (void);
 extern void *mm_malloc (size_t size);
 extern void mm_free (void *ptr);
+int validateHeap();
+
+BlockData *mergeWithPrev(BlockData *p);
 void *cloneToEnd(BlockData* bd);
 void *findBlock(size_t size);
-void *splitBlock(void *p, size_t size);
-void *increaseHeap(int minSize);
-void *addAsFreeBlock(BlockData* data);
+void *splitBlock(BlockData *p, size_t size);
+void *increaseHeap(size_t minSize);
+BlockData *findLargestFreeBlock(BlockData*);
 extern void *mm_realloc(void *ptr, size_t size);
+
+BlockData* jumpToNext(BlockData* p);
+BlockData* jumpToPrevious(BlockData* p) ;
+BlockData* jumpToEnd(BlockData* p);
+BlockData* jumpToFront(BlockData* p);
