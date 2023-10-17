@@ -65,8 +65,6 @@ void *mm_malloc(size_t size) {
     b = findBlock(size);
     if (b == NULL) {
         b = increaseHeap(size);
-    } else {
-        b = findBlock(size);
     }
 
     //Cast to BlockData
