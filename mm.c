@@ -22,7 +22,7 @@
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-#define BLOCK_METADATA_SIZE (2 * sizeof(BlockData))
+#define BLOCK_METADATA_SIZE (sizeof(BlockMetaData) + sizeof(BlockData)) //32B
 #define MINIMUM_BLOCK_SIZE (BLOCK_METADATA_SIZE)
 #define INITIAL_BLOCK_SIZE (1024)
 #define INITIAL_HEAP_SIZE (sizeof(HeapData))
@@ -38,10 +38,10 @@ int mm_init(void) {
     hd->firstFreeBlock = b;
 
     BlockData *bd = (BlockData *) b;
-    bd->size = INITIAL_BLOCK_SIZE;
+    bd->metaData.size = INITIAL_BLOCK_SIZE;
     bd->metaData.isUsed = false;
-    bd->left = NULL;
-    bd->right = NULL;
+    bd->next = NULL;
+    bd->previous = NULL;
 
     cloneToEnd(bd);
 
@@ -49,7 +49,7 @@ int mm_init(void) {
 }
 
 void *cloneToEnd(BlockData *bd) {
-    return memcpy(jumpToEnd(bd), bd, sizeof(BlockData));
+    return memcpy(jumpToEnd(bd), (BlockMetaData*) bd, sizeof(BlockMetaData));
 }
 
 void *mm_malloc(size_t size) {
@@ -68,7 +68,7 @@ void *mm_malloc(size_t size) {
     }
 
     //Cast to BlockData
-    if (b == (void *) -1) return NULL;
+    if (b == NULL) return NULL;
     BlockData *bd = (BlockData *) b;
 
     //Mark block as used
@@ -76,28 +76,28 @@ void *mm_malloc(size_t size) {
 
     //If block can be split into two, do that
     BlockData *newBlock = NULL;
-    if (bd->size >= size + MINIMUM_BLOCK_SIZE) {
+    if (bd->metaData.size >= size + MINIMUM_BLOCK_SIZE) {
         newBlock = splitBlock(bd, size);
     }
 
     //Rewire LL
-    if (bd->left) bd->left->right = bd->right;
-    if (bd->right) bd->right->left = bd->left;
+    if (bd->next) bd->next->previous = bd->previous;
+    if (bd->previous) bd->previous->next = bd->next;
 
     //If b was firstFreeBlock in LL, set it to next
-    if (hd->firstFreeBlock == bd) hd->firstFreeBlock = bd->left;
+    if (hd->firstFreeBlock == bd) hd->firstFreeBlock = bd->next;
 
     //Remove refs from block
-    bd->left = NULL;
-    bd->right = NULL;
+    bd->next = NULL;
+    bd->previous = NULL;
 
     //Clone bd data to end
     cloneToEnd(bd);
 
     //If split block exists, add to start of LL
     if (newBlock) {
-        newBlock->left = hd->firstFreeBlock;
-        if (hd->firstFreeBlock) hd->firstFreeBlock->right = newBlock;
+        newBlock->next = hd->firstFreeBlock;
+        if (hd->firstFreeBlock) hd->firstFreeBlock->previous = newBlock;
         hd->firstFreeBlock = newBlock;
     }
     return (void *) (bd + 1);
@@ -106,41 +106,39 @@ void *mm_malloc(size_t size) {
 void resetBlock(BlockData *p) {
     p->metaData.isUsed = false;
     p->metaData.other = 0;
-    p->size = 0;
-    p->left = NULL;
-    p->right = NULL;
+    p->metaData.size = 0;
+    p->next = NULL;
+    p->previous = NULL;
 }
 
 void *increaseHeap(size_t minSize) {
     bSize newSize = minSize > (2 << 12) ? minSize : (2 << 12);
 
     void *p = mem_sbrk(newSize + BLOCK_METADATA_SIZE);
-    if (p == (void *) -1) return p;
+    if (p == (void *) -1) return NULL;
     BlockData *pd = (BlockData *) p;
     resetBlock(pd);
 
-    pd->size = newSize;
+    pd->metaData.size = newSize;
     cloneToEnd(pd);
 
-    return (void*) mergeWithPrev((BlockData *) p);
+    return (void *) mergeWithPrev((BlockData *) p);
 }
 
 BlockData *mergeWithPrev(BlockData *p) {
-    HeapData *hd = (HeapData *) mem_heap_lo();
-
     BlockData *prev = jumpToPrevious(p);
-    if(prev == NULL) return p;
+    if (prev == NULL) return p;
 
     if (prev->metaData.isUsed) return p;
 
-    unsigned long newSize = prev->size + p->size + BLOCK_METADATA_SIZE;
+    unsigned long newSize = prev->metaData.size + p->metaData.size + BLOCK_METADATA_SIZE;
 
-    prev->size = newSize;
+    prev->metaData.size = newSize;
     cloneToEnd(prev);
 
     //Remove p from LL to confirm merge
-    if (p->left) p->left->right = p->right;
-    if (p->right) p->right->left = p->left;
+    if (p->next) p->next->previous = p->previous;
+    if (p->previous) p->previous->next = p->next;
 
     return prev;
 }
@@ -153,21 +151,21 @@ void *findBlock(size_t size) {
     if (hd->firstFreeBlock == NULL) return NULL;
     BlockData *curr = hd->firstFreeBlock;
 
-    while (curr->size < size && curr->left != NULL) {
-        curr = curr->left;
+    while (curr->metaData.size < size && curr->next != NULL) {
+        curr = curr->next;
     }
 
-    if (curr->size < size) return NULL;
+    if (curr->metaData.size < size) return NULL;
     return curr;
 }
 
 void *splitBlock(BlockData *p, size_t size) {
-    if (p->size < size + BLOCK_METADATA_SIZE) return (void *) -1;
+    if (p->metaData.size < size + BLOCK_METADATA_SIZE) return NULL;
 
-    bSize sizeBefore = p->size;
+    bSize sizeBefore = p->metaData.size;
 
     //Set to new size
-    p->size = size;
+    p->metaData.size = size;
 
     //Extract new block
     BlockData *newBlock = jumpToNext(p);
@@ -176,7 +174,7 @@ void *splitBlock(BlockData *p, size_t size) {
     resetBlock(newBlock);
 
     //Set metadata in new block
-    newBlock->size = sizeBefore - size - BLOCK_METADATA_SIZE;
+    newBlock->metaData.size = sizeBefore - size - BLOCK_METADATA_SIZE;
     newBlock->metaData.isUsed = false;
 
     //Clone both to end
@@ -190,37 +188,35 @@ void *splitBlock(BlockData *p, size_t size) {
 BlockData *mergeBlocks(BlockData *b1, BlockData *b2) {
     HeapData *hd = mem_heap_lo();
 
-    bSize newTotalSize = b1->size + b2->size + BLOCK_METADATA_SIZE;
+    bSize newTotalSize = b1->metaData.size + b2->metaData.size + BLOCK_METADATA_SIZE;
 
-    b1->size = newTotalSize;
+    b1->metaData.size = newTotalSize;
 
     //Remove b1 from the LL
-    if (b1->right) {
-        b1->right->left = b1->left;
+    if (b1->previous) {
+        b1->previous->next = b1->next;
     }
-    if (b1->left) {
-        b1->left->right = b1->right;
+    if (b1->next) {
+        b1->next->previous = b1->previous;
     }
-
-
 
     //Remove b2 from LL
-    if (b2->right) {
-        b2->right->left = b2->left;
+    if (b2->previous) {
+        b2->previous->next = b2->next;
     }
-    if (b2->left) {
-        b2->left->right = b2->right;
+    if (b2->next) {
+        b2->next->previous = b2->previous;
     }
 
     //If b1 or b2 was head, set next to head
     if (hd->firstFreeBlock == b1 || hd->firstFreeBlock == b2) {
-        hd->firstFreeBlock = b1->left ? b1->left : b2->left;
+        hd->firstFreeBlock = b1->next ? b1->next : b2->next;
     }
 
-    b1->left = NULL;
-    b1->right = NULL;
-    b2->left = NULL;
-    b2->right = NULL;
+    b1->next = NULL;
+    b1->previous = NULL;
+    b2->next = NULL;
+    b2->previous = NULL;
 
 
     cloneToEnd(b1);
@@ -231,8 +227,6 @@ BlockData *mergeBlocks(BlockData *b1, BlockData *b2) {
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr) {
-    static int i = 0;
-
     BlockData *bd = (BlockData *) ptr;
     bd--;
 
@@ -246,25 +240,25 @@ void mm_free(void *ptr) {
 
     //Check if block before/after can be merged
     void *low = h;
-    char *high = (char*) mem_heap_hi();
+    char *high = (char *) mem_heap_hi();
 
     //jumpToPrevious is not safe to use unless we know for sure that the previous block is inside the scope
     BlockData *prev = jumpToPrevious(bd);
-    if (prev && (void*) (((char*) (bd-1)) - sizeof(HeapData)) >= low && !(prev->metaData.isUsed)) {
+    if (prev && (char *) prev >= ((char *) low) + sizeof(HeapData) && !(prev->metaData.isUsed)) {
         bd = mergeBlocks(prev, bd);
     }
 
 
     //Jump to next is always safe to use if bd is actual blockdata
     BlockData *next = jumpToNext(bd);
-    if ((char *) (next + 1) <= high + 1&& !(next->metaData.isUsed)) {
+    if ((char *) (next + 1) <= high + 1 && !(next->metaData.isUsed)) {
         bd = mergeBlocks(bd, next);
     }
 
     //Then we add bd to the LL
-    if (hd->firstFreeBlock != bd) bd->left = hd->firstFreeBlock;
-    if (hd->firstFreeBlock != NULL) hd->firstFreeBlock->right = bd;
-    bd->right = NULL;
+    if (hd->firstFreeBlock != bd) bd->next = hd->firstFreeBlock;
+    if (hd->firstFreeBlock != NULL) hd->firstFreeBlock->previous = bd;
+    bd->previous = NULL;
     hd->firstFreeBlock = bd;
     cloneToEnd(bd);
 }
@@ -282,7 +276,7 @@ void *mm_realloc(void *ptr, size_t size) {
         return NULL;
 
     //If we realloc to a smaller size, we only copy size bytes
-    copySize = (((BlockData *) ptr) - 1)->size;
+    copySize = (((BlockData *) ptr) - 1)->metaData.size;
 
     if (size < copySize)
         copySize = size;
@@ -296,27 +290,27 @@ int validateHeap() {
     BlockData *start = (BlockData *) (((char *) mem_heap_lo()) + sizeof(HeapData));
     int nrOfBlocks = 1;
 
-    BlockData* prv = start;
-    BlockData* curr = NULL;
+    BlockData *prv = start;
+    BlockData *curr = NULL;
 
     while (((void *) (curr = jumpToNext(prv))) < mem_heap_hi()) {
         if (nrOfBlocks == 340) {
             printf("Reached");
         }
-        int diff = (int) (((char*) jumpToNext(curr)) - ((char*) curr));
-        if(curr->metaData.isUsed == false) {
-            printf("Block start: %p \n Block end: %p\n Diff: %d\n Is valid: %b\n Is used: %b \n Size: %ld\n Index: %d\n Other stuff: %d \n ----------------------------------------------\n",
+        int diff = (int) (((char *) jumpToNext(curr)) - ((char *) curr));
+        if (curr->metaData.isUsed == false) {
+            printf("Block start: %p \n Block end: %p\n Diff: %d\n Is valid: %b\n Is used: %b \n Size: %u\n Index: %d\n Other stuff: %d \n ----------------------------------------------\n",
                    curr,
                    jumpToNext(curr),
                    diff,
-                   diff == curr->size + BLOCK_METADATA_SIZE && curr->metaData.other == 0,
+                   diff == curr->metaData.size + BLOCK_METADATA_SIZE && curr->metaData.other == 0,
                    curr->metaData.isUsed,
-                   curr->size,
+                   curr->metaData.size,
                    nrOfBlocks,
                    curr->metaData.other
             );
         }
-        if(diff != curr->size + BLOCK_METADATA_SIZE || curr->metaData.other != 0) {
+        if (diff != curr->metaData.size + BLOCK_METADATA_SIZE || curr->metaData.other != 0) {
             printf("INVALID");
         }
         prv = curr;
@@ -325,25 +319,26 @@ int validateHeap() {
 
     return nrOfBlocks;
 }
+
 bool validateLL() {
-    HeapData *hd = (HeapData*) mem_heap_lo();
+    HeapData *hd = (HeapData *) mem_heap_lo();
 
     BlockData *firstBlock = hd->firstFreeBlock;
 
     BlockData *current = firstBlock;
 
-    while(current->left != NULL) {
-        if(current->metaData.isUsed) {
+    while (current->next != NULL) {
+        if (current->metaData.isUsed) {
             return false;
         }
-        if(current->right == NULL && current != firstBlock) {
+        if (current->previous == NULL && current != firstBlock) {
             return false;
         }
-        if(current->metaData.other != 0) {
+        if (current->metaData.other != 0) {
             return false;
         }
 
-        current = current->left;
+        current = current->next;
     }
 
 
@@ -352,20 +347,20 @@ bool validateLL() {
     BlockData *prev = NULL;
     current = firstBlock;
 
-    while(current < (BlockData *) mem_heap_hi()) {
-        if(prev != NULL) {
-            if(prev->metaData.isUsed == false && current->metaData.isUsed == false) {
+    while (current < (BlockData *) mem_heap_hi()) {
+        if (prev != NULL) {
+            if (prev->metaData.isUsed == false && current->metaData.isUsed == false) {
                 return false;
             }
 
             int distance = (int) (current - prev);
-            int gap = distance - (prev->size + BLOCK_METADATA_SIZE);
-            if(gap > 0 && (gap < MINIMUM_BLOCK_SIZE || gap % 8 != 1)) {
+            int gap = distance - (prev->metaData.size + BLOCK_METADATA_SIZE);
+            if (gap > 0 && (gap < MINIMUM_BLOCK_SIZE || gap % 8 != 1)) {
                 return false;
             }
         }
 
-        if(current->metaData.other != 0) {
+        if (current->metaData.other != 0) {
             return false;
         }
 
@@ -374,6 +369,7 @@ bool validateLL() {
     }
     return true;
 }
+
 int run() {
     void *a0 = mm_malloc(2040);
     void *a1 = mm_malloc(2040);
@@ -391,23 +387,17 @@ int run() {
 }
 
 BlockData *jumpToNext(BlockData *p) {
-    return (BlockData *) (((char *) (p + 2)) + p->size);
+    return (BlockData *) (((char *) p) + BLOCK_METADATA_SIZE + p->metaData.size);
 }
 
 BlockData *jumpToPrevious(BlockData *p) {
-    if(((char*) (p - 2)) - sizeof(HeapData) <= (char*) mem_heap_lo()) return NULL;
-    bSize prevSize = (p - 1)->size;
-    return (BlockData *) (((char *) (p - 2)) - prevSize);
+    if (((char *) p - BLOCK_METADATA_SIZE) - sizeof(HeapData) <= (char *) mem_heap_lo()) return NULL;
+    bSize prevSize = (((BlockMetaData *) p) - 1)->size;
+    return (BlockData *) (((char *) p) - BLOCK_METADATA_SIZE - prevSize);
 }
 
-BlockData *jumpToEnd(BlockData *p) {
-    return (BlockData *) (((char *) (p + 1)) + p->size);
+BlockMetaData *jumpToEnd(BlockData *p) {
+    return (BlockMetaData *) (((char *) (p + 1)) + p->metaData.size);
 }
-
-
-
-
-
-
 
 

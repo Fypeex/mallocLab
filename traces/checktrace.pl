@@ -45,7 +45,7 @@ $summary = $opt_s;
 # HASH keeps a running tally of outstanding alloc/realloc 
 # requests. When a free request is encountered, the corresponding 
 # hash entry is deleted. When we are finished reading the trace,
-# what is left are the unmatched alloc/realloc requests.
+# what is next are the unmatched alloc/realloc requests.
 #
 %HASH = (); 
 

@@ -5,15 +5,15 @@
 typedef uint32_t bSize;
 
 typedef struct BlockMetaData {
-    bool isUsed;
+    bool isUsed:1;
     bSize other:31;
+    bSize size;
 } BlockMetaData;
 
 typedef struct BlockData {
     BlockMetaData metaData;
-    bSize size;
-    struct BlockData* left;
-    struct BlockData* right;
+    struct BlockData* next;
+    struct BlockData* previous;
 } BlockData;
 
 
@@ -39,5 +39,5 @@ extern void *mm_realloc(void *ptr, size_t size);
 
 BlockData* jumpToNext(BlockData* p);
 BlockData* jumpToPrevious(BlockData* p) ;
-BlockData* jumpToEnd(BlockData* p);
+BlockMetaData* jumpToEnd(BlockData* p);
 BlockData* jumpToFront(BlockData* p);
