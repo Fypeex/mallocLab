@@ -24,9 +24,11 @@
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 #define BLOCK_METADATA_SIZE (2 * sizeof(BlockData))
 #define MINIMUM_BLOCK_SIZE (BLOCK_METADATA_SIZE)
-#define INITIAL_BLOCK_SIZE (1024)
+#define INITIAL_BLOCK_SIZE (40)
 #define INITIAL_HEAP_SIZE (sizeof(HeapData))
 
+
+void replaceNodeWithNextLargest(BlockData *node, BlockData *parent);
 
 int mm_init(void) {
     mem_init();
@@ -38,14 +40,12 @@ int mm_init(void) {
     resetBlock(bd);
     bd->size = INITIAL_BLOCK_SIZE;
 
+    cloneToEnd(bd);
+
     HeapData *hd = (HeapData *) h;
     hd->root = bd;
 
     return 0;
-}
-
-void *cloneToEnd(BlockData *bd) {
-    return memcpy(jumpToEnd(bd), bd, sizeof(BlockData));
 }
 
 void *mm_malloc(size_t size) {
@@ -67,7 +67,10 @@ void *mm_malloc(size_t size) {
             isFromTree = false;
         }
     }
-
+    bd->metaData.isUsed = true;
+    if (isFromTree) {
+        removeBlock(bd);
+    }
 
     if (bd == NULL) return NULL;
 
@@ -76,22 +79,17 @@ void *mm_malloc(size_t size) {
         addBlock(split, split->size);
     }
 
-    bd->metaData.isUsed = true;
-    if (isFromTree) {
-        removeBlock(bd);
-    }
     //Got raw pointer, need to add to tree etc
-
 
     return bd + 1;
 
 }
 
 void insertBlockRecursive(BlockData *insertPoint, BlockData *bd, bSize size) {
-    if(insertPoint->size == size) {
-        while(insertPoint -> nextBlock) insertPoint = insertPoint -> nextBlock;
-        insertPoint -> nextBlock = bd;
-    }else if (insertPoint->size > size) {
+    if (insertPoint->size == size) {
+        while (insertPoint->nextBlock) insertPoint = insertPoint->nextBlock;
+        insertPoint->nextBlock = bd;
+    } else if (insertPoint->size > size) {
         if (insertPoint->left == NULL) {
             insertPoint->left = bd;
         } else {
@@ -127,7 +125,7 @@ BlockData *increaseHeap(size_t minSize) {
     bSize newSize = minSize > (1 << 13) ? minSize : (1 << 13);
 
     void *p = mem_sbrk(newSize + BLOCK_METADATA_SIZE);
-    if (p == (void *) -1) return p;
+    if (p == (void *) -1) return NULL;
     BlockData *pd = (BlockData *) p;
     resetBlock(pd);
 
@@ -143,7 +141,6 @@ BlockData *mergeWithPrev(BlockData *p) {
 
     if (prev->metaData.isUsed) return p;
 
-    removeBlock(p);
     removeBlock(prev);
 
     unsigned long newSize = prev->size + p->size + BLOCK_METADATA_SIZE;
@@ -151,13 +148,114 @@ BlockData *mergeWithPrev(BlockData *p) {
     prev->size = newSize;
     cloneToEnd(prev);
 
-    removeBlock(prev);
+    addBlock(prev, newSize);
 
     return prev;
 }
 
 void removeBlock(BlockData *node) {
+    HeapData *hd = (HeapData *) mem_heap_lo();
 
+    if(node == hd -> root) {
+        //Node is only list in tree
+        if(node -> left == NULL && node -> right == NULL) {
+            hd -> root = node -> nextBlock;
+            return;
+        }
+
+        //Node is root element
+        if(node -> nextBlock == NULL) {
+            //Only element
+            //Find next biggest element and move it
+            replaceNodeWithNextLargest(node, NULL);
+
+        }else {
+            node -> nextBlock -> left = node -> left;
+            node -> nextBlock -> right = node -> right;
+
+            hd -> root = node -> nextBlock;
+        }
+
+        return;
+    }
+
+    BlockData *list = hd->root;
+    BlockData *parent = NULL;
+    while (list->size != node->size) {
+        parent = list;
+        if (node->size > list->size) list = list->right;
+        if (node->size < list->size) list = list->left;
+    }
+
+
+
+    BlockData *prev = NULL;
+    while (list != node) {
+        prev = list;
+        list = list->nextBlock;
+    }
+
+    if(prev == NULL) {
+        //First element of list
+        if(list -> nextBlock == NULL) {
+            // Only element of list
+            replaceNodeWithNextLargest(list, parent);
+
+        } else {
+            list -> nextBlock -> left = list -> left;
+            list -> nextBlock -> right = list -> right;
+
+            if(parent -> left == list) {
+                parent -> left = list -> nextBlock;
+            }
+            else {
+                parent -> right = list -> nextBlock;
+            }
+
+        }
+    } else {
+
+        prev -> nextBlock = list -> nextBlock;
+
+    }
+}
+
+void replaceNodeWithNextLargest(BlockData *node, BlockData *parent) {
+    if(parent && node -> left == NULL && node -> right != NULL) {
+        if(parent -> left == node) parent -> left = node -> right;
+        else parent -> right = node -> right;
+    }
+    else if(parent && node -> left != NULL && node -> right == NULL) {
+        if(parent -> left == node) parent -> left = node -> left;
+        else parent -> right = node -> left;
+    }
+    else if(parent && node -> left == NULL && node -> right == NULL) {
+        if(parent -> left == node) parent -> left = NULL;
+        else parent -> right = NULL;
+    } else {
+        BlockData *nextLargest = node -> right;
+        BlockData *par = node;
+        while(nextLargest -> right != NULL) {
+            par = nextLargest;
+            nextLargest = nextLargest -> left;
+        }
+
+        if(nextLargest -> right != NULL) {
+            par -> left = nextLargest -> right;
+        }
+
+        nextLargest -> left = node -> left;
+        nextLargest -> right = node -> right;
+
+        if(parent) {
+            if (parent->left == node) {
+                parent->left = nextLargest;
+            } else {
+                parent->right = nextLargest;
+            }
+        }
+
+    }
 }
 
 BlockData *findExactFit(BlockData *start, size_t size) {
@@ -209,7 +307,6 @@ void *splitBlock(BlockData *p, size_t size) {
 
     //Set metadata in new block
     newBlock->size = sizeBefore - size - BLOCK_METADATA_SIZE;
-    newBlock->metaData.isUsed = false;
 
     //Clone both to end
     cloneToEnd(p);
@@ -229,6 +326,7 @@ BlockData *mergeBlocks(BlockData *b1, BlockData *b2) {
     cloneToEnd(b1);
     return b1;
 }
+
 
 /*
  * mm_free - Freeing a block does nothing.
@@ -259,6 +357,11 @@ void *mm_realloc(void *ptr, size_t size) {
     return newptr;
 }
 
+
+void *cloneToEnd(BlockData *bd) {
+    return memcpy(jumpToEnd(bd), bd, sizeof(BlockData));
+}
+
 BlockData *jumpToNext(BlockData *p) {
     return (BlockData *) (((char *) (p + 2)) + p->size);
 }
@@ -275,6 +378,14 @@ BlockData *jumpToEnd(BlockData *p) {
 
 
 
+int main() {
+    mm_init();
 
-
+    void *p1 = mm_malloc(40);
+    void *p2 = mm_malloc(64);
+    void *p3 = mm_malloc(88);
+    void *p4 = mm_malloc(56);
+    void *p5 = mm_malloc(80);
+    void *p6 = mm_malloc(96);
+}
 
