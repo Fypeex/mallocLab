@@ -112,7 +112,7 @@ void resetBlock(BlockData *p) {
 }
 
 void *increaseHeap(size_t minSize) {
-    bSize newSize = minSize > (2 << 12) ? minSize : (2 << 12);
+    bSize newSize = minSize > (2 << 10) ? minSize : (2 << 10);
 
     void *p = mem_sbrk(newSize + BLOCK_METADATA_SIZE);
     if (p == (void *) -1) return NULL;
