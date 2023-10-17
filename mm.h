@@ -12,14 +12,13 @@ typedef struct BlockMetaData {
 typedef struct BlockData {
     BlockMetaData metaData;
     bSize size;
-    struct BlockData* nextFreeBlock;
-    struct BlockData* previousFreeBlock;
+    struct BlockData* left;
+    struct BlockData* right;
 } BlockData;
 
 
 typedef struct HeapData {
     BlockData* firstFreeBlock;
-    BlockData* largestFreeBlock;
 } HeapData;
 
 

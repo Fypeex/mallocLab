@@ -36,13 +36,12 @@ int mm_init(void) {
     HeapData *hd = (HeapData *) p;
 
     hd->firstFreeBlock = b;
-    hd->largestFreeBlock = b;
 
     BlockData *bd = (BlockData *) b;
     bd->size = INITIAL_BLOCK_SIZE;
     bd->metaData.isUsed = false;
-    bd->nextFreeBlock = NULL;
-    bd->previousFreeBlock = NULL;
+    bd->left = NULL;
+    bd->right = NULL;
 
     cloneToEnd(bd);
 
@@ -63,7 +62,8 @@ void *mm_malloc(size_t size) {
 
     //Get block pointer
     void *b;
-    if (!hd->largestFreeBlock || hd->largestFreeBlock->size < size) {
+    b = findBlock(size);
+    if (b == NULL) {
         b = increaseHeap(size);
     } else {
         b = findBlock(size);
@@ -83,56 +83,38 @@ void *mm_malloc(size_t size) {
     }
 
     //Rewire LL
-    if (bd->nextFreeBlock) bd->nextFreeBlock->previousFreeBlock = bd->previousFreeBlock;
-    if (bd->previousFreeBlock) bd->previousFreeBlock->nextFreeBlock = bd->nextFreeBlock;
+    if (bd->left) bd->left->right = bd->right;
+    if (bd->right) bd->right->left = bd->left;
 
     //If b was firstFreeBlock in LL, set it to next
-    if (hd->firstFreeBlock == bd) hd->firstFreeBlock = bd->nextFreeBlock;
+    if (hd->firstFreeBlock == bd) hd->firstFreeBlock = bd->left;
 
     //Remove refs from block
-    bd->nextFreeBlock = NULL;
-    bd->previousFreeBlock = NULL;
+    bd->left = NULL;
+    bd->right = NULL;
 
     //Clone bd data to end
     cloneToEnd(bd);
 
     //If split block exists, add to start of LL
     if (newBlock) {
-        newBlock->nextFreeBlock = hd->firstFreeBlock;
-        if (hd->firstFreeBlock) hd->firstFreeBlock->previousFreeBlock = newBlock;
+        newBlock->left = hd->firstFreeBlock;
+        if (hd->firstFreeBlock) hd->firstFreeBlock->right = newBlock;
         hd->firstFreeBlock = newBlock;
     }
-
-    //Search for largest block again
-    hd->largestFreeBlock = findLargestFreeBlock(hd->firstFreeBlock);
-
     return (void *) (bd + 1);
-}
-
-BlockData *findLargestFreeBlock(BlockData *start) {
-    if (start == NULL) return NULL;
-
-    BlockData *largest = start;
-    BlockData *curr = start;
-    while (curr->nextFreeBlock != NULL && curr->nextFreeBlock != largest) {
-        curr = curr->nextFreeBlock;
-
-        if (curr->size > largest->size) largest = curr;
-    }
-
-    return largest;
 }
 
 void resetBlock(BlockData *p) {
     p->metaData.isUsed = false;
     p->metaData.other = 0;
     p->size = 0;
-    p->nextFreeBlock = NULL;
-    p->previousFreeBlock = NULL;
+    p->left = NULL;
+    p->right = NULL;
 }
 
 void *increaseHeap(size_t minSize) {
-    bSize newSize = minSize > 1024 ? minSize : 1024;
+    bSize newSize = minSize > (2 << 12) ? minSize : (2 << 12);
 
     void *p = mem_sbrk(newSize + BLOCK_METADATA_SIZE);
     if (p == (void *) -1) return p;
@@ -159,13 +141,8 @@ BlockData *mergeWithPrev(BlockData *p) {
     cloneToEnd(prev);
 
     //Remove p from LL to confirm merge
-    if (p->nextFreeBlock) p->nextFreeBlock->previousFreeBlock = p->previousFreeBlock;
-    if (p->previousFreeBlock) p->previousFreeBlock->nextFreeBlock = p->nextFreeBlock;
-
-    //Add the merged block to refs if applicable
-    if (hd->largestFreeBlock == NULL || prev->size > hd->largestFreeBlock->size) {
-        hd->largestFreeBlock = prev;
-    }
+    if (p->left) p->left->right = p->right;
+    if (p->right) p->right->left = p->left;
 
     return prev;
 }
@@ -175,15 +152,14 @@ void *findBlock(size_t size) {
     void *p = mem_heap_lo();
     HeapData *hd = (HeapData *) p;
 
-    if (hd->largestFreeBlock->size < size) return (void *) -1;
-    if (hd->firstFreeBlock == NULL) return (void *) -1;
+    if (hd->firstFreeBlock == NULL) return NULL;
     BlockData *curr = hd->firstFreeBlock;
 
-    while (curr->size < size && curr->nextFreeBlock != NULL) {
-        curr = curr->nextFreeBlock;
+    while (curr->size < size && curr->left != NULL) {
+        curr = curr->left;
     }
 
-    if (curr->size < size) return (void *) -1;
+    if (curr->size < size) return NULL;
     return curr;
 }
 
@@ -221,37 +197,34 @@ BlockData *mergeBlocks(BlockData *b1, BlockData *b2) {
     b1->size = newTotalSize;
 
     //Remove b1 from the LL
-    if (b1->previousFreeBlock) {
-        b1->previousFreeBlock->nextFreeBlock = b1->nextFreeBlock;
+    if (b1->right) {
+        b1->right->left = b1->left;
     }
-    if (b1->nextFreeBlock) {
-        b1->nextFreeBlock->previousFreeBlock = b1->previousFreeBlock;
+    if (b1->left) {
+        b1->left->right = b1->right;
     }
 
 
 
     //Remove b2 from LL
-    if (b2->previousFreeBlock) {
-        b2->previousFreeBlock->nextFreeBlock = b2->nextFreeBlock;
+    if (b2->right) {
+        b2->right->left = b2->left;
     }
-    if (b2->nextFreeBlock) {
-        b2->nextFreeBlock->previousFreeBlock = b2->previousFreeBlock;
+    if (b2->left) {
+        b2->left->right = b2->right;
     }
 
     //If b1 or b2 was head, set next to head
     if (hd->firstFreeBlock == b1 || hd->firstFreeBlock == b2) {
-        hd->firstFreeBlock = b1->nextFreeBlock ? b1->nextFreeBlock : b2->nextFreeBlock;
+        hd->firstFreeBlock = b1->left ? b1->left : b2->left;
     }
 
-    b1->nextFreeBlock = NULL;
-    b1->previousFreeBlock = NULL;
-    b2->nextFreeBlock = NULL;
-    b2->previousFreeBlock = NULL;
+    b1->left = NULL;
+    b1->right = NULL;
+    b2->left = NULL;
+    b2->right = NULL;
 
 
-    if (b1->size > hd->largestFreeBlock->size) {
-        hd->largestFreeBlock = b1;
-    }
     cloneToEnd(b1);
     return b1;
 }
@@ -290,15 +263,10 @@ void mm_free(void *ptr) {
         bd = mergeBlocks(bd, next);
     }
 
-    //After merging with previous block and next block we check if we can update LargestBlock
-    if (hd->largestFreeBlock == NULL || bd->size > hd->largestFreeBlock->size) {
-        hd->largestFreeBlock = bd;
-    }
-
     //Then we add bd to the LL
-    if (hd->firstFreeBlock != bd) bd->nextFreeBlock = hd->firstFreeBlock;
-    if (hd->firstFreeBlock != NULL) hd->firstFreeBlock->previousFreeBlock = bd;
-    bd->previousFreeBlock = NULL;
+    if (hd->firstFreeBlock != bd) bd->left = hd->firstFreeBlock;
+    if (hd->firstFreeBlock != NULL) hd->firstFreeBlock->right = bd;
+    bd->right = NULL;
     hd->firstFreeBlock = bd;
     cloneToEnd(bd);
 }
@@ -362,29 +330,22 @@ int validateHeap() {
 bool validateLL() {
     HeapData *hd = (HeapData*) mem_heap_lo();
 
-
-    //Check LL consistency
-    if(hd->firstFreeBlock == NULL && hd->largestFreeBlock == NULL) return true;
-    if((hd->firstFreeBlock != NULL) ^ (hd->largestFreeBlock != NULL)) {
-        return false;
-    }
-
     BlockData *firstBlock = hd->firstFreeBlock;
 
     BlockData *current = firstBlock;
 
-    while(current->nextFreeBlock != NULL) {
+    while(current->left != NULL) {
         if(current->metaData.isUsed) {
             return false;
         }
-        if(current->previousFreeBlock == NULL && current != firstBlock) {
+        if(current->right == NULL && current != firstBlock) {
             return false;
         }
         if(current->metaData.other != 0) {
             return false;
         }
 
-        current = current->nextFreeBlock;
+        current = current->left;
     }
 
 
