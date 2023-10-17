@@ -582,15 +582,17 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges) {
         return 0;
     }
 
+    int a = 0;
+    int f = 0;
+    int r = 0;
     /* Interpret each operation in the trace in order */
     for (i = 0; i < trace->num_ops; i++) {
         index = trace->ops[i].index;
         size = trace->ops[i].size;
-
         switch (trace->ops[i].type) {
 
             case ALLOC: /* mm_malloc */
-
+                a++;
                 /* Call the student's malloc */
                 if ((p = mm_malloc(size)) == NULL) {
                     malloc_error(tracenum, i, "mm_malloc failed.");
@@ -599,7 +601,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges) {
 
                 /*
                  * Test the range of the new block for correctness and add it
-                 * to the range list if OK. The block must be  be aligned properly,
+                 * to the range list if OK. The block must be aligned properly,
                  * and must not overlap any currently allocated block.
                  */
                 if (add_range(ranges, p, size, tracenum, i) == 0)
@@ -620,7 +622,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges) {
                 break;
 
             case REALLOC: /* mm_realloc */
-
+                r++;
                 /* Call the student's realloc */
                 oldp = trace->blocks[index];
                 if ((newp = mm_realloc(oldp, size)) == NULL) {
@@ -657,7 +659,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges) {
                 break;
 
             case FREE: /* mm_free */
-
+                f++;
                 /* Remove region from list and call student's free function */
                 p = trace->blocks[index];
                 remove_range(ranges, p);
@@ -669,7 +671,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges) {
         }
 
     }
-
+    printf("Allocations: %d \n Frees: %d \n, Re-allocations: %d\n", a,f,r);
     /* As far as we know, this is a valid malloc package */
     return 1;
 }

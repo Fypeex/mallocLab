@@ -1,16 +1,17 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
-typedef unsigned long bSize;
+typedef uint32_t bSize;
 
 typedef struct BlockMetaData {
-    bool isUsed:1;
-    unsigned long other:63;
+    bool isUsed;
+    bSize other:31;
 } BlockMetaData;
 
 typedef struct BlockData {
     BlockMetaData metaData;
-    size_t size;
+    bSize size;
     struct BlockData* nextFreeBlock;
     struct BlockData* previousFreeBlock;
 } BlockData;
@@ -27,7 +28,8 @@ extern int mm_init (void);
 extern void *mm_malloc (size_t size);
 extern void mm_free (void *ptr);
 int validateHeap();
-
+bool validateLL();
+void resetBlock(BlockData *p);
 BlockData *mergeWithPrev(BlockData *p);
 void *cloneToEnd(BlockData* bd);
 void *findBlock(size_t size);
