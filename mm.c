@@ -15,32 +15,55 @@
 #include "mm.h"
 #include "memlib.h"
 
-/* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
-
-/* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
-
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-#define BLOCK_METADATA_SIZE (2 * sizeof(BlockData))
-#define MINIMUM_BLOCK_SIZE (BLOCK_METADATA_SIZE)
-#define INITIAL_BLOCK_SIZE (40)
+#define BMD (sizeof(BlockMetaData))
+#define BD (sizeof(BlockData))
+#define TD (sizeof(TailData))
+#define BDS (BMD + TD)
+#define MINIMUM_BLOCK_SIZE (BD + TD)
+#define INITIAL_BLOCK_SIZE (1 << 4)
 #define INITIAL_HEAP_SIZE (sizeof(HeapData))
+#define HEAP_DATA (HeapData*) mem_heap_lo()
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-void replaceNodeWithNextLargest(BlockData *node, BlockData *parent);
+// Common routine to set a block as empty
+void setEmpty(BlockData *bd) {
+    bd->left = bd->right = bd->next = NULL;
+    bd->metaData.height = 0;
+}
+
+// Common routine to copy metadata to the end of the block
+void copyToEnd(BlockMetaData *bd) {
+    if (!bd->isUsed) {
+        ((TailData *) ((char *) bd + bd->size + BMD))->front = (BlockData *) bd;
+    } else {
+        ((TailData *) ((char *) bd + BMD + bd->size))->front = bd;
+    }
+}
+
+// Initializers and wrappers for insert and delete functions
+void insertWrapper(BlockData *bd) {
+    HeapData *hd = HEAP_DATA;
+    insert(bd, &(hd->root));
+}
+
+void deleteWrapper(BlockData *bd) {
+    HeapData *hd = HEAP_DATA;
+    delete(bd, &(hd->root));
+}
 
 int mm_init(void) {
     mem_init();
     void *h = mem_sbrk(INITIAL_HEAP_SIZE);
-    void *b = mem_sbrk(INITIAL_BLOCK_SIZE + BLOCK_METADATA_SIZE);
+    void *b = mem_sbrk(INITIAL_BLOCK_SIZE + BDS);
 
     BlockData *bd = (BlockData *) b;
 
-    resetBlock(bd);
-    bd->size = INITIAL_BLOCK_SIZE;
+    bd->metaData.size = INITIAL_BLOCK_SIZE;
 
-    cloneToEnd(bd);
+    copyToEnd((BlockMetaData *) bd);
 
     HeapData *hd = (HeapData *) h;
     hd->root = bd;
@@ -48,290 +71,76 @@ int mm_init(void) {
     return 0;
 }
 
+BlockData *mergeBlocks(BlockData *bd1, BlockData *bd2) {
+    deleteWrapper(bd1);
+    deleteWrapper(bd2);
+
+    bSize newSize = bd1->metaData.size + bd2->metaData.size + BDS;
+    bd1->metaData.size = newSize;
+
+    setEmpty(bd1);
+
+    copyToEnd((BlockMetaData *) bd1);
+
+    return bd1;
+}
+
 void *mm_malloc(size_t size) {
+    HeapData *hd = HEAP_DATA;
+
     //Align size to byte address
-    size = ALIGN(size);
+    size = MAX(ALIGN(size), MINIMUM_BLOCK_SIZE);
 
-    //Get heapdata from start of heap
-    void *p = mem_heap_lo();
-    HeapData *hd = (HeapData *) p;
+    BlockData *freeBlock = findFirst(hd->root, size);
 
-    //Find block with exact size
-    BlockData *bd = findExactFit(hd->root, size);
-    bool isFromTree = true;
-    if (bd == NULL) {
-        bd = (hd->root != NULL) ? findFirstFit(hd->root, size) : NULL;
-
-        if (bd == NULL) {
-            bd = increaseHeap(size);
-            isFromTree = false;
-        }
-    }
-    bd->metaData.isUsed = true;
-    if (isFromTree) {
-        removeBlock(bd);
-    }
-
-    if (bd == NULL) return NULL;
-
-    BlockData *split = splitBlock(bd, size);
-    if (split != NULL) {
-        addBlock(split, split->size);
-    }
-
-    //Got raw pointer, need to add to tree etc
-
-    return bd + 1;
-
-}
-
-void insertBlockRecursive(BlockData *insertPoint, BlockData *bd, bSize size) {
-    if (insertPoint->size == size) {
-        while (insertPoint->nextBlock) insertPoint = insertPoint->nextBlock;
-        insertPoint->nextBlock = bd;
-    } else if (insertPoint->size > size) {
-        if (insertPoint->left == NULL) {
-            insertPoint->left = bd;
-        } else {
-            insertBlockRecursive(insertPoint->left, bd, size);
-        }
+    if (freeBlock) {
+        deleteWrapper(freeBlock);
+        setEmpty(freeBlock);
     } else {
-        if (insertPoint->right == NULL) {
-            insertPoint->right = bd;
-        } else {
-            insertBlockRecursive(insertPoint->right, bd, size);
-        }
-    }
-}
-
-void addBlock(BlockData *bd, bSize size) {
-    HeapData *hd = mem_heap_lo();
-
-    if (hd->root == NULL) {
-        hd->root = bd;
-    } else {
-        insertBlockRecursive(hd->root, bd, size);
-    }
-}
-
-void resetBlock(BlockData *p) {
-    p->metaData.isUsed = false;
-    p->metaData.other = 0;
-    p->size = 0;
-    p->nextBlock = NULL;
-}
-
-BlockData *increaseHeap(size_t minSize) {
-    bSize newSize = minSize > (1 << 13) ? minSize : (1 << 13);
-
-    void *p = mem_sbrk(newSize + BLOCK_METADATA_SIZE);
-    if (p == (void *) -1) return NULL;
-    BlockData *pd = (BlockData *) p;
-    resetBlock(pd);
-
-    pd->size = newSize;
-    cloneToEnd(pd);
-
-    return mergeWithPrev((BlockData *) p);
-}
-
-BlockData *mergeWithPrev(BlockData *p) {
-    BlockData *prev = jumpToPrevious(p);
-    if (prev == NULL) return p;
-
-    if (prev->metaData.isUsed) return p;
-
-    removeBlock(prev);
-
-    unsigned long newSize = prev->size + p->size + BLOCK_METADATA_SIZE;
-
-    prev->size = newSize;
-    cloneToEnd(prev);
-
-    addBlock(prev, newSize);
-
-    return prev;
-}
-
-void removeBlock(BlockData *node) {
-    HeapData *hd = (HeapData *) mem_heap_lo();
-
-    if(node == hd -> root) {
-        //Node is only list in tree
-        if(node -> left == NULL && node -> right == NULL) {
-            hd -> root = node -> nextBlock;
-            return;
-        }
-
-        //Node is root element
-        if(node -> nextBlock == NULL) {
-            //Only element
-            //Find next biggest element and move it
-            replaceNodeWithNextLargest(node, NULL);
-
-        }else {
-            node -> nextBlock -> left = node -> left;
-            node -> nextBlock -> right = node -> right;
-
-            hd -> root = node -> nextBlock;
-        }
-
-        return;
+        freeBlock = increaseHeap(size);
     }
 
-    BlockData *list = hd->root;
-    BlockData *parent = NULL;
-    while (list->size != node->size) {
-        parent = list;
-        if (node->size > list->size) list = list->right;
-        if (node->size < list->size) list = list->left;
+    BlockData *split = splitBlock(freeBlock, size);
+    if (split) {
+        split->metaData.isUsed = false;
+        insertWrapper(split);
     }
 
+    ((BlockMetaData *) (freeBlock))->isUsed = true;
 
 
-    BlockData *prev = NULL;
-    while (list != node) {
-        prev = list;
-        list = list->nextBlock;
-    }
-
-    if(prev == NULL) {
-        //First element of list
-        if(list -> nextBlock == NULL) {
-            // Only element of list
-            replaceNodeWithNextLargest(list, parent);
-
-        } else {
-            list -> nextBlock -> left = list -> left;
-            list -> nextBlock -> right = list -> right;
-
-            if(parent -> left == list) {
-                parent -> left = list -> nextBlock;
-            }
-            else {
-                parent -> right = list -> nextBlock;
-            }
-
-        }
-    } else {
-
-        prev -> nextBlock = list -> nextBlock;
-
-    }
+    return (void *) ((char *) freeBlock + BMD);
 }
-
-void replaceNodeWithNextLargest(BlockData *node, BlockData *parent) {
-    if(parent && node -> left == NULL && node -> right != NULL) {
-        if(parent -> left == node) parent -> left = node -> right;
-        else parent -> right = node -> right;
-    }
-    else if(parent && node -> left != NULL && node -> right == NULL) {
-        if(parent -> left == node) parent -> left = node -> left;
-        else parent -> right = node -> left;
-    }
-    else if(parent && node -> left == NULL && node -> right == NULL) {
-        if(parent -> left == node) parent -> left = NULL;
-        else parent -> right = NULL;
-    } else {
-        BlockData *nextLargest = node -> right;
-        BlockData *par = node;
-        while(nextLargest -> right != NULL) {
-            par = nextLargest;
-            nextLargest = nextLargest -> left;
-        }
-
-        if(nextLargest -> right != NULL) {
-            par -> left = nextLargest -> right;
-        }
-
-        nextLargest -> left = node -> left;
-        nextLargest -> right = node -> right;
-
-        if(parent) {
-            if (parent->left == node) {
-                parent->left = nextLargest;
-            } else {
-                parent->right = nextLargest;
-            }
-        }
-
-    }
-}
-
-BlockData *findExactFit(BlockData *start, size_t size) {
-    if (start == NULL) return NULL;
-    if (start->size == size) {
-        BlockData *curr = start;
-
-        while (curr != NULL && curr->metaData.isUsed) {
-            curr = curr->nextBlock;
-        }
-
-        return curr;
-    }
-    if (start->size < size) return findExactFit(start->right, size);
-    if (start->size > size) return findExactFit(start->left, size);
-}
-
-BlockData *findFirstFit(BlockData *start, size_t size) {
-    if (start == NULL) return NULL;
-    if (start->size >= size) {
-        BlockData *curr = start;
-
-        while (curr != NULL && curr->metaData.isUsed) {
-            curr = curr->nextBlock;
-        }
-
-        if (curr == NULL) {
-            return findFirstFit(start->right, size);
-        }
-
-        return curr;
-    }
-    if (start->size < size) return findFirstFit(start->right, size);
-}
-
-void *splitBlock(BlockData *p, size_t size) {
-    if (p->size < size + BLOCK_METADATA_SIZE) return NULL;
-
-    bSize sizeBefore = p->size;
-
-    //Set to new size
-    p->size = size;
-
-    //Extract new block
-    BlockData *newBlock = jumpToNext(p);
-
-    //Reset data in new block
-    resetBlock(newBlock);
-
-    //Set metadata in new block
-    newBlock->size = sizeBefore - size - BLOCK_METADATA_SIZE;
-
-    //Clone both to end
-    cloneToEnd(p);
-    cloneToEnd(newBlock);
-
-    return newBlock;
-}
-
-//b1 < b2
-BlockData *mergeBlocks(BlockData *b1, BlockData *b2) {
-    HeapData *hd = mem_heap_lo();
-
-    bSize newTotalSize = b1->size + b2->size + BLOCK_METADATA_SIZE;
-
-    b1->size = newTotalSize;
-
-    cloneToEnd(b1);
-    return b1;
-}
-
 
 /*
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr) {
+    BlockMetaData *bmd = (BlockMetaData *) ((char *) ptr - BMD);
+
+    if (!bmd->isUsed) return;
+
+    BlockData *bd = (BlockData *) bmd;
+    bd->metaData.isUsed = false;
+
+    void *low = mem_heap_lo();
+    void *high = mem_heap_hi();
+
+    BlockMetaData *prev = ((TailData *) ((char *) bd - TD))->front;
+    if ((char *) bd - TD - MINIMUM_BLOCK_SIZE > (char *) low + INITIAL_HEAP_SIZE && !prev->isUsed) {
+        deleteWrapper(bd);
+        bd = mergeBlocks((BlockData *) prev, bd);
+    }
+
+    BlockData *next = (BlockData *) (((char *) bd) + BDS + bd->metaData.size);
+    if ((char *) next + TD <= (char *) high + 1 && !(next->metaData.isUsed)) {
+        bd = mergeBlocks(bd, next);
+    }
+
+    setEmpty(bd);
+    copyToEnd((BlockMetaData *) bd);
+
+    insertWrapper(bd);
 }
 
 /*
@@ -341,13 +150,11 @@ void *mm_realloc(void *ptr, size_t size) {
     void *oldptr = ptr;
     void *newptr;
     size_t copySize;
+    copySize = ((BlockMetaData *) (((char *) ptr) - BMD))->size;
+    // Check if next block is free and if we can merge
 
     newptr = mm_malloc(size);
-    if (newptr == NULL)
-        return NULL;
-
     //If we realloc to a smaller size, we only copy size bytes
-    copySize = (((BlockData *) ptr) - 1)->size;
 
     if (size < copySize)
         copySize = size;
@@ -355,37 +162,290 @@ void *mm_realloc(void *ptr, size_t size) {
     mm_free(oldptr);
 
     return newptr;
+
+}
+
+// rotates to the left
+BlockData *rotate_left(BlockData *root) {
+    if (root == NULL || root->right == NULL) {
+        return root;
+    }
+
+    BlockData *right_child = root->right;
+    root->right = right_child->left;
+    right_child->left = root;
+
+    root->metaData.height = 1 + MAX(height(root->left), height(root->right));
+    right_child->metaData.height = 1 + MAX(height(right_child->left), height(right_child->right));
+
+    return right_child;
+}
+
+BlockData *rotate_right(BlockData *root) {
+    if (root == NULL || root->left == NULL) {
+        return root;
+    }
+
+    BlockData *left_child = root->left;
+    root->left = left_child->right;
+    left_child->right = root;
+
+    root->metaData.height = 1 + MAX(height(root->left), height(root->right));
+    left_child->metaData.height = 1 + MAX(height(left_child->left), height(left_child->right));
+
+    return left_child;
 }
 
 
-void *cloneToEnd(BlockData *bd) {
-    return memcpy(jumpToEnd(bd), bd, sizeof(BlockData));
+bSize height(BlockData *root) {
+    if (root == NULL) {
+        return 0;
+    }
+    return root->metaData.height;
 }
 
-BlockData *jumpToNext(BlockData *p) {
-    return (BlockData *) (((char *) (p + 2)) + p->size);
-}
-
-BlockData *jumpToPrevious(BlockData *p) {
-    if (((char *) (p - 2)) - sizeof(HeapData) <= (char *) mem_heap_lo()) return NULL;
-    bSize prevSize = (p - 1)->size;
-    return (BlockData *) (((char *) (p - 2)) - prevSize);
-}
-
-BlockData *jumpToEnd(BlockData *p) {
-    return (BlockData *) (((char *) (p + 1)) + p->size);
+bSize balance_factor(BlockData *root) {
+    if (root == NULL) {
+        return 0;
+    }
+    return height(root->left) - height(root->right);
 }
 
 
+BlockData *rebalance(BlockData *node) {
+    if (node == NULL) return NULL;
 
-int main() {
-    mm_init();
+    node->metaData.height = 1 + MAX(height(node->left), height(node->right));
 
-    void *p1 = mm_malloc(40);
-    void *p2 = mm_malloc(64);
-    void *p3 = mm_malloc(88);
-    void *p4 = mm_malloc(56);
-    void *p5 = mm_malloc(80);
-    void *p6 = mm_malloc(96);
+    bSize balance = balance_factor(node);
+
+    if (balance > 1) {
+        if (balance_factor(node->left) >= 0) {
+            return rotate_right(node);
+        } else {
+            node->left = rotate_left(node->left);
+            return rotate_right(node);
+        }
+    } else {
+        if (balance_factor(node->right) <= 0) {
+            return rotate_left(node);
+        } else {
+            node->right = rotate_right(node->right);
+            return rotate_left(node);
+        }
+    }
+
+    return node;
+}
+
+// inserts a new node in the AVL tree
+BlockData *insert(BlockData *bd, BlockData **root) {
+    HeapData *hd = HEAP_DATA;
+
+    if (hd->root == NULL) {
+        hd->root = bd;
+    } else if (hd->root->metaData.size == bd->metaData.size) {
+        BlockData *curr = hd->root;
+        while (curr->next != NULL) curr = curr->next;
+        curr->next = bd;
+    } else {
+        BlockData *curr = hd->root;
+        BlockData *parent = NULL;
+
+        while (curr != NULL && curr->metaData.size != bd->metaData.size) {
+            parent = curr;
+            if (curr->metaData.size > bd->metaData.size) curr = curr->left;
+            else curr = curr->right;
+        }
+        if (curr == NULL) {
+            if (bd->metaData.size > parent->metaData.size) parent->right = bd;
+            else parent->left = bd;
+        } else {
+            while (curr->next) curr = curr->next;
+            curr->next = bd;
+        }
+
+        *root = rebalance(*root);
+
+        return *root;
+    }
+    return NULL;
+}
+
+// deletes a bd from the AVL tree
+BlockData *delete(BlockData *bd, BlockData **root) {
+    HeapData *hd = (HEAP_DATA);
+    if (bd == hd->root) {
+        if (hd->root->left != NULL && hd->root->right != NULL) {
+            BlockData *swap = hd->root->left;
+            BlockData *swapParent = hd->root;
+
+            // Find largest node in the left subtree
+            while (swap->right != NULL) {
+                swapParent = swap;
+                swap = swap->right;
+            }
+
+            // Bypass swap from its parent
+            if (swapParent->right == swap) {
+                swapParent->right = swap->left;
+            } else {
+                swapParent->left = swap->left;
+            }
+
+            // Update swap to point to root's children
+            swap->left = hd->root->left;
+            swap->right = hd->root->right;
+
+            // Update hd->root to point to swap
+            hd->root = swap;
+        } else if ((hd->root->left == NULL) ^ (hd->root->right == NULL)) {
+            hd->root = hd->root->left == NULL ? hd->root->right : hd->root->left;
+        } else {
+            hd->root = NULL;
+        }
+    } else {
+        BlockData *curr = hd->root;
+        BlockData *parent = NULL;
+        BlockData *pred = NULL;
+
+        while (curr != NULL && curr->metaData.size != bd->metaData.size) {
+            parent = curr;
+            if (curr->metaData.size > bd->metaData.size) curr = curr->left;
+            else curr = curr->right;
+        }
+        if (curr == NULL) return NULL;
+
+        while (curr != NULL && curr != bd) {
+            pred = curr;
+            curr = curr->next;
+        }
+        if (curr == NULL) return NULL;
+
+        if (pred == NULL) {
+            //Is first element of list
+            if (curr->next == NULL) {
+                if (curr->left == NULL && curr->right == NULL) {
+                    if (parent->left == curr) parent->left = NULL;
+                    else parent->right = NULL;
+                } else if ((curr->left == NULL) ^ (curr->right == NULL)) {
+                    if (parent->left == curr) parent->left = curr->left ? curr->left : curr->right;
+                    else parent->right = curr->left ? curr->left : curr->right;
+                } else {
+                    BlockData *swap = curr->left;
+                    BlockData *swapParent = NULL;
+                    while (swap->right != NULL) {
+                        swapParent = swap;
+                        swap = swap->right;
+                    }
+
+                    if (swapParent == NULL) {
+                        //Immediate left of current
+                        if (parent->right == curr) {
+                            parent->right = swap;
+
+                            swap->right = curr->right;
+                        } else {
+                            parent->left = swap;
+                            swap->right = curr->right;
+                        }
+                    } else {
+                        swapParent->right = swap->left;
+                        swap->left = curr->left;
+                        swap->right = curr->right;
+                        if (parent->left == curr) parent->left = swap;
+                        else parent->right = swap;
+                    }
+                }
+
+            } else {
+                if (parent->left == bd) {
+                    parent->left = curr->next;
+                } else {
+                    parent->right = curr->next;
+                }
+                curr->next->metaData.height = curr->metaData.height;
+                curr->next->left = curr->left;
+                curr->next->right = curr->right;
+            }
+        } else {
+            pred->next = curr->next;
+        }
+    }
+
+    if (hd->root != NULL) {
+        *root = rebalance(*root);
+    }
+    return *root;
+}
+
+
+BlockData *abc(BlockData *root, bSize size) {
+    if (root == NULL) return NULL;
+    // If current block is bigger or equal, search both sides
+    if (root->metaData.size >= size) {
+        if (root->left == NULL || root->left->metaData.size < size) return root;
+            //Check if left is tighter
+        else {
+            return findFirst(root->left, size);
+        }
+    }
+        // If current block is smaller, only search the right
+    else {
+        return findFirst(root->right, size);
+    }
+}
+
+BlockData *findFirst(BlockData *root, bSize size) {
+    while(root != NULL && root -> metaData.size < size) root = root -> right;
+
+    return root;
+}
+
+BlockData *splitBlock(BlockData *bd, bSize size) {
+    if (bd == NULL) return NULL;
+    if (bd->metaData.size <= size + MINIMUM_BLOCK_SIZE) return NULL;
+
+    bSize oldSize = bd->metaData.size;
+
+    bd->metaData.size = size;
+    copyToEnd((BlockMetaData *) bd);
+
+    BlockData *split = (BlockData *) (((char *) bd + bd->metaData.size + BMD + TD));
+    split->metaData.size = oldSize - size - BDS;
+    setEmpty(split);
+    copyToEnd((BlockMetaData *) split);
+    return split;
+}
+
+BlockData *increaseHeap(bSize size) {
+    bSize min = size > 1 << 13 ? size : 1 << 13;
+
+    BlockData *bd = (BlockData *) mem_sbrk(min + BDS);
+
+    bd->metaData.size = min;
+    setEmpty(bd);
+    copyToEnd((BlockMetaData *) bd);
+
+    return mergeWithPrevious(bd);
+}
+
+BlockData *mergeWithPrevious(BlockData *bd) {
+    if (bd == NULL) return bd;
+
+    BlockData *prev = ((TailData *) (((char *) bd) - TD))->front;
+    if (prev == NULL) return bd;
+    if (prev->metaData.isUsed) return bd;
+
+    deleteWrapper(prev);
+    setEmpty(prev);
+
+    bSize newSize = bd->metaData.size + prev->metaData.size + BDS;
+
+    prev->metaData.size = newSize;
+
+    copyToEnd((BlockMetaData *) prev);
+
+    return prev;
 }
 

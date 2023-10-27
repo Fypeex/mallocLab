@@ -590,7 +590,6 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges) {
         index = trace->ops[i].index;
         size = trace->ops[i].size;
         switch (trace->ops[i].type) {
-
             case ALLOC: /* mm_malloc */
                 a++;
                 /* Call the student's malloc */
@@ -998,7 +997,7 @@ static void usage(void) {
     fprintf(stderr, "\t-g         Generate summary info for autograder.\n");
     fprintf(stderr, "\t-h         Print this message.\n");
     fprintf(stderr, "\t-l         Run libc malloc as well.\n");
-    fprintf(stderr, "\t-t <dir>   Directory to find default traces.\n");
+    fprintf(stderr, "\t-t <dir>   Directory to findFirst default traces.\n");
     fprintf(stderr, "\t-v         Print per-trace performance breakdowns.\n");
     fprintf(stderr, "\t-V         Print additional debug info.\n");
 }

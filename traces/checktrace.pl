@@ -108,7 +108,7 @@ while ($line = <STDIN>) {
     }
     
     if ($cmd eq "f") {
-	delete $HASH{$id};
+	deleteWrapper $HASH{$id};
     }
     else {
 	$HASH{$id} = $cmd;

@@ -18,7 +18,7 @@
  * This is the list of default tracefiles in TRACEDIR that the driver
  * will use for testing. Modify this if you want to add or delete
  * traces from the driver's test suite. For example, if you don't want
- * your students to implement realloc, you can delete the last two
+ * your students to implement realloc, you can deleteWrapper the last two
  * traces.
  */
 #define DEFAULT_TRACEFILES \

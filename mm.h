@@ -5,18 +5,21 @@
 typedef uint32_t bSize;
 
 typedef struct BlockMetaData {
-    bool isUsed;
-    bSize other: 31;
+    bool isUsed:1;
+    bSize height: 31;
+    bSize size;
 } BlockMetaData;
 
 typedef struct BlockData {
     BlockMetaData metaData;
-    bSize size;
-    struct BlockData *nextBlock;
     struct BlockData *left;
     struct BlockData *right;
-
+    struct BlockData * next;
 } BlockData;
+
+typedef struct TailData {
+    void *front;
+} TailData;
 
 typedef struct HeapData {
     BlockData *root;
@@ -24,40 +27,19 @@ typedef struct HeapData {
 
 
 extern int mm_init(void);
-
 extern void *mm_malloc(size_t size);
-
 extern void mm_free(void *ptr);
-
-int validateHeap();
-
-bool validateLL();
-
-void resetBlock(BlockData *p);
-
-BlockData *mergeWithPrev(BlockData *p);
-
-void *cloneToEnd(BlockData *bd);
-
-BlockData *findExactFit(BlockData *start, size_t size);
-
-BlockData *findFirstFit(BlockData *start, size_t size);
-
-void *splitBlock(BlockData *p, size_t size);
-
-void addBlock(BlockData *bd, bSize size);
-void removeBlock(BlockData *node);
-
-BlockData *increaseHeap(size_t minSize);
-
-BlockData *findLargestFreeBlock(BlockData *);
-
 extern void *mm_realloc(void *ptr, size_t size);
 
-BlockData *jumpToNext(BlockData *p);
+BlockData *findFirst(BlockData* root, bSize  size);
+bSize height(BlockData* root);
+BlockData* insert(BlockData* bd, BlockData **root);
+BlockData *delete(BlockData *bd, BlockData **root);
 
-BlockData *jumpToPrevious(BlockData *p);
+BlockData* splitBlock(BlockData* bd, bSize size);
 
-BlockData *jumpToEnd(BlockData *p);
+BlockData *increaseHeap(bSize size);
+BlockData *mergeWithPrevious(BlockData* bd);
 
-BlockData *jumpToFront(BlockData *p);
+void deleteWrapper(BlockData *bd);
+void insertWrapper(BlockData *bd);

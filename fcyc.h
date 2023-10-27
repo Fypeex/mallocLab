@@ -50,7 +50,7 @@ void set_fcyc_compensate(int compensate_arg);
 void set_fcyc_k(int k);
 
 /* 
- * set_fcyc_maxsamples - Maximum number of samples attempting to find 
+ * set_fcyc_maxsamples - Maximum number of samples attempting to findFirst
  *     K-best within some tolerance.
  *     When exceeded, just return best sample found.
  *     Default = 20
